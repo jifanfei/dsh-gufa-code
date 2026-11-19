@@ -84,7 +84,10 @@
     "unsaved": "Unsaved",
     "saveConflict": "File changed on disk; reopen before saving",
     "binary": "Binary file cannot be edited as text",
-    "tooLarge": "File too large to open"
+    "tooLarge": "File too large to open",
+    "sendSelectionRef": "Insert selected lines into the conversation (@ reference)",
+    "sendSelectionEmpty": "Select code to reference first",
+    "sendSelectionFailed": "Failed to insert reference"
   },
   "chat": {
     "title": "Gufa AI",
@@ -117,6 +120,7 @@
     "ln": "Ln",
     "saved": "Saved",
     "dirty": "Unsaved",
-    "noGit": "No Git repo"
+    "noGit": "No Git repo",
+    "sendSelectionRef": "Insert selected lines into the conversation as an @ reference"
   }
 }

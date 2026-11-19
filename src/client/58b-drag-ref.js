@@ -134,6 +134,61 @@ function activeSessionId() {
 			if (typeIntoComposer(mention + " ")) return { ok: true, via: "composer" };
 			return { ok: false, reason: reason || "输入框不可用" };
 		}
+		/**
+		 * 把一段编辑器选区作为 `@相对路径 Lx-Ly` 引用插入右侧官方会话。
+		 * 供 Monaco 右键菜单与状态栏按钮复用；会话输入框不可用时退回剪贴板。
+		 * @param {{path?: string, startLine?: number, endLine?: number, text?: string}} info 选区信息
+		 * @returns {{ok: boolean, reason?: string, ref?: string, copied?: boolean}}
+		 */
+		G.gufaSendSelection = function gufaSendSelection(info) {
+			try {
+				const selection = info !== null && typeof info === "object" ? info : null
+				if (selection === null) return { ok: false, reason: "没有选区" }
+				const path = String(selection.path ?? "")
+				const text = String(selection.text ?? "")
+				if (path === "" || text === "") return { ok: false, reason: "没有选区" }
+				const startLine = Math.trunc(Number(selection.startLine))
+				const endLine = Math.trunc(Number(selection.endLine))
+				const hasRange = Number.isFinite(startLine) && startLine > 0 && Number.isFinite(endLine) && endLine > 0
+				const payload = {
+					path,
+					startLine: hasRange ? startLine : void 0,
+					endLine: hasRange ? endLine : void 0,
+					text,
+				}
+				const result = insertRef(ctx, payload)
+				if (result !== null && result !== void 0 && result.ok === true) {
+					/* 与「复制/粘贴」路径保持一致：记下 label → 行范围，点 chip 才能跳回代码 */
+					try {
+						const label = hasRange ? labelOf(path) + " " + rangeText(startLine, endLine) : labelOf(path)
+						insertedRefs.set(label, { path, startLine: hasRange ? startLine : void 0, endLine: hasRange ? endLine : void 0 })
+						saveRefs()
+					} catch (_) {}
+					return result
+				}
+				/* 会话面板不可用（没有当前会话 / 输入框不在页面上）时退化成复制，用户仍可手动粘贴 */
+				const range = hasRange
+					? (startLine === endLine ? " L" + startLine : " L" + Math.min(startLine, endLine) + "-" + Math.max(startLine, endLine))
+					: ""
+				const ref = mentionOf(path) + range
+				let copied = false
+				try {
+					if (navigator.clipboard !== void 0 && typeof navigator.clipboard.writeText === "function") {
+						navigator.clipboard.writeText(ref)
+						copied = true
+					}
+				} catch (_) {}
+				try {
+					G.refToast(
+						copied ? "已复制引用：" + ref : "插入失败：" + String(result && result.reason || "输入框不可用"),
+						copied ? "ok" : "err",
+					)
+				} catch (_) {}
+				return { ok: false, reason: String(result && result.reason || "输入框不可用"), ref, copied }
+			} catch (error) {
+				return { ok: false, reason: String((error && error.message) || error) }
+			}
+		}
 
 		function isOurs(transfer) {
 			if (transfer === null || transfer === void 0) return false;

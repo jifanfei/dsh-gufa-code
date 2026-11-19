@@ -816,6 +816,8 @@ const GUFA_LINT_ENABLED = true
       if (position === null || position === undefined) return
       const hasSelection = selection !== null && selection !== undefined && !selection.isEmpty()
       const selectedText = hasSelection ? model.getValueInRange(selection) : ''
+      const selStartLine = hasSelection ? Math.min(selection.startLineNumber, selection.endLineNumber) : position.lineNumber
+      const selEndLine = hasSelection ? Math.max(selection.startLineNumber, selection.endLineNumber) : position.lineNumber
       const onCursor = propsRef.current.onCursor
       if (typeof onCursor === 'function') {
         onCursor({
@@ -823,6 +825,8 @@ const GUFA_LINT_ENABLED = true
           line: position.lineNumber,
           column: position.column,
           selectedText,
+          selStartLine,
+          selEndLine,
           lineCount: model.getLineCount(),
         })
       }
@@ -839,6 +843,8 @@ const GUFA_LINT_ENABLED = true
       const before = value.slice(0, start)
       const line = before.split('\n').length
       const column = start - before.lastIndexOf('\n')
+      const endBefore = value.slice(0, end)
+      const endLine = endBefore.split('\n').length
       const onCursor = propsRef.current.onCursor
       if (typeof onCursor === 'function') {
         onCursor({
@@ -846,6 +852,8 @@ const GUFA_LINT_ENABLED = true
           line,
           column,
           selectedText: start !== end ? value.slice(start, end) : '',
+          selStartLine: line,
+          selEndLine: endLine,
           lineCount: value.split('\n').length,
         })
       }
@@ -1513,6 +1521,46 @@ const GUFA_LINT_ENABLED = true
             }))
             /* 光标 / 选区变化上报（状态栏行号列、AI 上下文选区）。 */
             subscriptions.push(instance.onDidChangeCursorSelection(() => reportCursor()))
+            /* 补丁：把选中行作为 @ 引用插入右侧会话（编辑器右键菜单 / 命令面板） */
+            try {
+              const insertSelectionAction = instance.addAction({
+                id: 'gufa.insert-selection-ref',
+                label: G.t('editor.sendSelectionRef'),
+                contextMenuGroupId: 'navigation',
+                contextMenuOrder: 1.5,
+                run: (target) => {
+                  try {
+                    const owner = target !== null && target !== undefined ? target : instance
+                    const model = owner.getModel()
+                    const selection = owner.getSelection()
+                    const path = modelPathRef.current
+                    if (model === null || model === undefined || path === null ||
+                      selection === null || selection === undefined || selection.isEmpty()) {
+                      G.refToast(G.t('editor.sendSelectionEmpty'), 'err')
+                      return
+                    }
+                    const info = {
+                      path,
+                      startLine: Math.min(selection.startLineNumber, selection.endLineNumber),
+                      endLine: Math.max(selection.startLineNumber, selection.endLineNumber),
+                      text: model.getValueInRange(selection),
+                    }
+                    if (typeof G.gufaSendSelection !== 'function') {
+                      G.refToast(G.t('editor.sendSelectionFailed') + '：G.gufaSendSelection 未就绪，请刷新页面', 'err')
+                      return
+                    }
+                    G.gufaSendSelection(info)
+                  } catch (error) {
+                    G.refToast(G.t('editor.sendSelectionFailed') + '：' + G.errorText(error), 'err')
+                  }
+                },
+              })
+              if (insertSelectionAction !== null && insertSelectionAction !== undefined && typeof insertSelectionAction.dispose === 'function') {
+                subscriptions.push(insertSelectionAction)
+              }
+            } catch {
+              /* ignore */
+            }
             /* ── JS/TS 诊断（Host 侧 tsc）：语法错误 / 未定义变量 / 类型错误 ── */
             const lintTimers = new Map()
             const clearLintTimers = () => {

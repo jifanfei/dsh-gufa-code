@@ -328,6 +328,9 @@ const DICT_ZH = {
   'editor.saveConflict': '文件已在磁盘上被修改，请重新打开后再保存',
   'editor.binary': '二进制文件，无法以文本编辑',
   'editor.tooLarge': '文件过大，无法打开',
+  'editor.sendSelectionRef': '把选中行插入右侧会话（@ 引用）',
+  'editor.sendSelectionEmpty': '先选中要引用的代码',
+  'editor.sendSelectionFailed': '插入引用失败',
   'editor.loading': '加载编辑器…',
   'editor.save': '保存',
   'editor.close': '关闭',
@@ -363,6 +366,7 @@ const DICT_ZH = {
   'status.saved': '已保存',
   'status.dirty': '未保存',
   'status.noGit': '非 Git 仓库',
+  'status.sendSelectionRef': '把选中行作为 @ 引用插入右侧会话',
   'status.lines': '行',
   'status.encoding': 'UTF-8',
   'status.spaces': '空格: 2',
@@ -594,6 +598,9 @@ const DICT_EN = {
   'editor.saveConflict': 'File changed on disk; reopen before saving',
   'editor.binary': 'Binary file cannot be edited as text',
   'editor.tooLarge': 'File too large to open',
+  'editor.sendSelectionRef': 'Insert selected lines into the conversation (@ reference)',
+  'editor.sendSelectionEmpty': 'Select code to reference first',
+  'editor.sendSelectionFailed': 'Failed to insert reference',
   'editor.loading': 'Loading editor…',
   'editor.save': 'Save',
   'editor.close': 'Close',
@@ -629,6 +636,7 @@ const DICT_EN = {
   'status.saved': 'Saved',
   'status.dirty': 'Unsaved',
   'status.noGit': 'No Git repo',
+  'status.sendSelectionRef': 'Insert selected lines into the conversation as an @ reference',
   'status.lines': 'lines',
   'status.encoding': 'UTF-8',
   'status.spaces': 'Spaces: 2',
@@ -3522,6 +3530,8 @@ const GUFA_LINT_ENABLED = true
       if (position === null || position === undefined) return
       const hasSelection = selection !== null && selection !== undefined && !selection.isEmpty()
       const selectedText = hasSelection ? model.getValueInRange(selection) : ''
+      const selStartLine = hasSelection ? Math.min(selection.startLineNumber, selection.endLineNumber) : position.lineNumber
+      const selEndLine = hasSelection ? Math.max(selection.startLineNumber, selection.endLineNumber) : position.lineNumber
       const onCursor = propsRef.current.onCursor
       if (typeof onCursor === 'function') {
         onCursor({
@@ -3529,6 +3539,8 @@ const GUFA_LINT_ENABLED = true
           line: position.lineNumber,
           column: position.column,
           selectedText,
+          selStartLine,
+          selEndLine,
           lineCount: model.getLineCount(),
         })
       }
@@ -3545,6 +3557,8 @@ const GUFA_LINT_ENABLED = true
       const before = value.slice(0, start)
       const line = before.split('\n').length
       const column = start - before.lastIndexOf('\n')
+      const endBefore = value.slice(0, end)
+      const endLine = endBefore.split('\n').length
       const onCursor = propsRef.current.onCursor
       if (typeof onCursor === 'function') {
         onCursor({
@@ -3552,6 +3566,8 @@ const GUFA_LINT_ENABLED = true
           line,
           column,
           selectedText: start !== end ? value.slice(start, end) : '',
+          selStartLine: line,
+          selEndLine: endLine,
           lineCount: value.split('\n').length,
         })
       }
@@ -4219,6 +4235,46 @@ const GUFA_LINT_ENABLED = true
             }))
             /* 光标 / 选区变化上报（状态栏行号列、AI 上下文选区）。 */
             subscriptions.push(instance.onDidChangeCursorSelection(() => reportCursor()))
+            /* 补丁：把选中行作为 @ 引用插入右侧会话（编辑器右键菜单 / 命令面板） */
+            try {
+              const insertSelectionAction = instance.addAction({
+                id: 'gufa.insert-selection-ref',
+                label: G.t('editor.sendSelectionRef'),
+                contextMenuGroupId: 'navigation',
+                contextMenuOrder: 1.5,
+                run: (target) => {
+                  try {
+                    const owner = target !== null && target !== undefined ? target : instance
+                    const model = owner.getModel()
+                    const selection = owner.getSelection()
+                    const path = modelPathRef.current
+                    if (model === null || model === undefined || path === null ||
+                      selection === null || selection === undefined || selection.isEmpty()) {
+                      G.refToast(G.t('editor.sendSelectionEmpty'), 'err')
+                      return
+                    }
+                    const info = {
+                      path,
+                      startLine: Math.min(selection.startLineNumber, selection.endLineNumber),
+                      endLine: Math.max(selection.startLineNumber, selection.endLineNumber),
+                      text: model.getValueInRange(selection),
+                    }
+                    if (typeof G.gufaSendSelection !== 'function') {
+                      G.refToast(G.t('editor.sendSelectionFailed') + '：G.gufaSendSelection 未就绪，请刷新页面', 'err')
+                      return
+                    }
+                    G.gufaSendSelection(info)
+                  } catch (error) {
+                    G.refToast(G.t('editor.sendSelectionFailed') + '：' + G.errorText(error), 'err')
+                  }
+                },
+              })
+              if (insertSelectionAction !== null && insertSelectionAction !== undefined && typeof insertSelectionAction.dispose === 'function') {
+                subscriptions.push(insertSelectionAction)
+              }
+            } catch {
+              /* ignore */
+            }
             /* ── JS/TS 诊断（Host 侧 tsc）：语法错误 / 未定义变量 / 类型错误 ── */
             const lintTimers = new Map()
             const clearLintTimers = () => {
@@ -10730,6 +10786,61 @@ function activeSessionId() {
 			if (typeIntoComposer(mention + " ")) return { ok: true, via: "composer" };
 			return { ok: false, reason: reason || "输入框不可用" };
 		}
+		/**
+		 * 把一段编辑器选区作为 `@相对路径 Lx-Ly` 引用插入右侧官方会话。
+		 * 供 Monaco 右键菜单与状态栏按钮复用；会话输入框不可用时退回剪贴板。
+		 * @param {{path?: string, startLine?: number, endLine?: number, text?: string}} info 选区信息
+		 * @returns {{ok: boolean, reason?: string, ref?: string, copied?: boolean}}
+		 */
+		G.gufaSendSelection = function gufaSendSelection(info) {
+			try {
+				const selection = info !== null && typeof info === "object" ? info : null
+				if (selection === null) return { ok: false, reason: "没有选区" }
+				const path = String(selection.path ?? "")
+				const text = String(selection.text ?? "")
+				if (path === "" || text === "") return { ok: false, reason: "没有选区" }
+				const startLine = Math.trunc(Number(selection.startLine))
+				const endLine = Math.trunc(Number(selection.endLine))
+				const hasRange = Number.isFinite(startLine) && startLine > 0 && Number.isFinite(endLine) && endLine > 0
+				const payload = {
+					path,
+					startLine: hasRange ? startLine : void 0,
+					endLine: hasRange ? endLine : void 0,
+					text,
+				}
+				const result = insertRef(ctx, payload)
+				if (result !== null && result !== void 0 && result.ok === true) {
+					/* 与「复制/粘贴」路径保持一致：记下 label → 行范围，点 chip 才能跳回代码 */
+					try {
+						const label = hasRange ? labelOf(path) + " " + rangeText(startLine, endLine) : labelOf(path)
+						insertedRefs.set(label, { path, startLine: hasRange ? startLine : void 0, endLine: hasRange ? endLine : void 0 })
+						saveRefs()
+					} catch (_) {}
+					return result
+				}
+				/* 会话面板不可用（没有当前会话 / 输入框不在页面上）时退化成复制，用户仍可手动粘贴 */
+				const range = hasRange
+					? (startLine === endLine ? " L" + startLine : " L" + Math.min(startLine, endLine) + "-" + Math.max(startLine, endLine))
+					: ""
+				const ref = mentionOf(path) + range
+				let copied = false
+				try {
+					if (navigator.clipboard !== void 0 && typeof navigator.clipboard.writeText === "function") {
+						navigator.clipboard.writeText(ref)
+						copied = true
+					}
+				} catch (_) {}
+				try {
+					G.refToast(
+						copied ? "已复制引用：" + ref : "插入失败：" + String(result && result.reason || "输入框不可用"),
+						copied ? "ok" : "err",
+					)
+				} catch (_) {}
+				return { ok: false, reason: String(result && result.reason || "输入框不可用"), ref, copied }
+			} catch (error) {
+				return { ok: false, reason: String((error && error.message) || error) }
+			}
+		}
 
 		function isOurs(transfer) {
 			if (transfer === null || transfer === void 0) return false;
@@ -15786,7 +15897,7 @@ G.GufaApp = function GufaApp(props) {
       setSelection((current) => (current === null ? current : null))
       return
     }
-    pendingSelectionRef.current = { text: selectedText, path: value.path, line: value.line, column: value.column }
+    pendingSelectionRef.current = { text: selectedText, path: value.path, line: value.line, column: value.column, startLine: value.selStartLine, endLine: value.selEndLine }
     if (selectionTimerRef.current !== null) return
     selectionTimerRef.current = window.setTimeout(() => {
       selectionTimerRef.current = null
@@ -15794,10 +15905,26 @@ G.GufaApp = function GufaApp(props) {
       if (latest === null) return
       setSelection((current) => {
         if (current !== null && current.text === latest.text && current.path === latest.path &&
-            current.line === latest.line && current.column === latest.column) return current
+            current.line === latest.line && current.column === latest.column &&
+            current.startLine === latest.startLine && current.endLine === latest.endLine) return current
         return latest
       })
     }, 180)
+  }, [])
+  /* 补丁：把编辑器选中行作为 @ 引用插入右侧会话 */
+  const selectionRangeLabel = useCallback((value) => {
+    const start = Number(value !== null && value !== undefined ? value.startLine : NaN)
+    const end = Number(value !== null && value !== undefined ? value.endLine : NaN)
+    if (Number.isFinite(start) !== true || Number.isFinite(end) !== true || start <= 0) return 'L?'
+    return start === end ? `L${start}` : `L${start}-${end}`
+  }, [])
+  const sendSelectionRef = useCallback((value) => {
+    if (value === null || value === undefined) return
+    if (typeof G.gufaSendSelection !== 'function') {
+      G.refToast('G.gufaSendSelection 未就绪，请刷新页面', 'err')
+      return
+    }
+    G.gufaSendSelection({ path: value.path, startLine: value.startLine, endLine: value.endLine, text: value.text })
   }, [])
   const handleEditorSave = useCallback((path) => { void saveFile(path) }, [saveFile])
   const handleSelectTab = useCallback((path) => {
@@ -16082,6 +16209,20 @@ G.GufaApp = function GufaApp(props) {
       activeTab !== null ? h('span', { className: 'gufa-status-item' }, activeTab.title !== undefined && activeTab.title !== null ? activeTab.title : G.shortPath(activeTab.path, 56)) : null,
       activeTab !== null && problems[activeTab.path] !== undefined
         ? h('span', { className: 'gufa-status-item', style: { color: problems[activeTab.path].errors > 0 ? '#f85149' : '#e5c07b' } }, `${problems[activeTab.path].errors} ✕ ${problems[activeTab.path].warnings} ⚠`)
+        : null,
+      selection !== null && typeof selection.text === 'string' && selection.text !== ''
+        ? h(
+            'button',
+            {
+              type: 'button',
+              className: 'gufa-status-item',
+              title: t('status.sendSelectionRef'),
+              style: { border: 0, background: 'transparent', color: 'var(--gufa-accent)', cursor: 'pointer', font: 'inherit', padding: '0 4px' },
+              onClick: () => sendSelectionRef(selection),
+            },
+            h(G.Icon, { name: 'send', size: 11 }),
+            selectionRangeLabel(selection),
+          )
         : null,
       h(G.StatusCursor, { activePath, fallbackLineCount: lineCount }),
       activeTab !== null && activeTab.dirty === true ? h('span', { className: 'gufa-status-item', style: { color: 'var(--gufa-accent)' } }, t('status.dirty')) : null,

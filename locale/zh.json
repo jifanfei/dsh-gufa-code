@@ -85,7 +85,10 @@
     "unsaved": "未保存",
     "saveConflict": "文件已在磁盘上被修改，请重新打开后再保存",
     "binary": "二进制文件，无法以文本编辑",
-    "tooLarge": "文件过大，无法打开"
+    "tooLarge": "文件过大，无法打开",
+    "sendSelectionRef": "把选中行插入右侧会话（@ 引用）",
+    "sendSelectionEmpty": "先选中要引用的代码",
+    "sendSelectionFailed": "插入引用失败"
   },
   "chat": {
     "title": "古法 AI",
@@ -118,6 +121,7 @@
     "ln": "行",
     "saved": "已保存",
     "dirty": "未保存",
-    "noGit": "非 Git 仓库"
+    "noGit": "非 Git 仓库",
+    "sendSelectionRef": "把选中行作为 @ 引用插入右侧会话"
   }
 }

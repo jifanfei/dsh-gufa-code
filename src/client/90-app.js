@@ -2742,7 +2742,7 @@ G.GufaApp = function GufaApp(props) {
       setSelection((current) => (current === null ? current : null))
       return
     }
-    pendingSelectionRef.current = { text: selectedText, path: value.path, line: value.line, column: value.column }
+    pendingSelectionRef.current = { text: selectedText, path: value.path, line: value.line, column: value.column, startLine: value.selStartLine, endLine: value.selEndLine }
     if (selectionTimerRef.current !== null) return
     selectionTimerRef.current = window.setTimeout(() => {
       selectionTimerRef.current = null
@@ -2750,10 +2750,26 @@ G.GufaApp = function GufaApp(props) {
       if (latest === null) return
       setSelection((current) => {
         if (current !== null && current.text === latest.text && current.path === latest.path &&
-            current.line === latest.line && current.column === latest.column) return current
+            current.line === latest.line && current.column === latest.column &&
+            current.startLine === latest.startLine && current.endLine === latest.endLine) return current
         return latest
       })
     }, 180)
+  }, [])
+  /* 补丁：把编辑器选中行作为 @ 引用插入右侧会话 */
+  const selectionRangeLabel = useCallback((value) => {
+    const start = Number(value !== null && value !== undefined ? value.startLine : NaN)
+    const end = Number(value !== null && value !== undefined ? value.endLine : NaN)
+    if (Number.isFinite(start) !== true || Number.isFinite(end) !== true || start <= 0) return 'L?'
+    return start === end ? `L${start}` : `L${start}-${end}`
+  }, [])
+  const sendSelectionRef = useCallback((value) => {
+    if (value === null || value === undefined) return
+    if (typeof G.gufaSendSelection !== 'function') {
+      G.refToast('G.gufaSendSelection 未就绪，请刷新页面', 'err')
+      return
+    }
+    G.gufaSendSelection({ path: value.path, startLine: value.startLine, endLine: value.endLine, text: value.text })
   }, [])
   const handleEditorSave = useCallback((path) => { void saveFile(path) }, [saveFile])
   const handleSelectTab = useCallback((path) => {
@@ -3038,6 +3054,20 @@ G.GufaApp = function GufaApp(props) {
       activeTab !== null ? h('span', { className: 'gufa-status-item' }, activeTab.title !== undefined && activeTab.title !== null ? activeTab.title : G.shortPath(activeTab.path, 56)) : null,
       activeTab !== null && problems[activeTab.path] !== undefined
         ? h('span', { className: 'gufa-status-item', style: { color: problems[activeTab.path].errors > 0 ? '#f85149' : '#e5c07b' } }, `${problems[activeTab.path].errors} ✕ ${problems[activeTab.path].warnings} ⚠`)
+        : null,
+      selection !== null && typeof selection.text === 'string' && selection.text !== ''
+        ? h(
+            'button',
+            {
+              type: 'button',
+              className: 'gufa-status-item',
+              title: t('status.sendSelectionRef'),
+              style: { border: 0, background: 'transparent', color: 'var(--gufa-accent)', cursor: 'pointer', font: 'inherit', padding: '0 4px' },
+              onClick: () => sendSelectionRef(selection),
+            },
+            h(G.Icon, { name: 'send', size: 11 }),
+            selectionRangeLabel(selection),
+          )
         : null,
       h(G.StatusCursor, { activePath, fallbackLineCount: lineCount }),
       activeTab !== null && activeTab.dirty === true ? h('span', { className: 'gufa-status-item', style: { color: 'var(--gufa-accent)' } }, t('status.dirty')) : null,
